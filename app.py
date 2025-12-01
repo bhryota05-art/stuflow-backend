@@ -21,9 +21,9 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://stuflow-frontend.onrender.com",  # Your frontend
-            "http://127.0.0.1:5500",  # Local testing
-            "http://localhost:5500"   # Local testing
+            "https://stuflow-frontend.onrender.com",  # ← YOUR frontend
+            "http://127.0.0.1:5500",
+            "http://localhost:5500"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
@@ -910,5 +910,6 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
