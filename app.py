@@ -3,7 +3,6 @@ from flask import Flask, request, jsonify, g, render_template
 from datetime import datetime, timedelta
 import jwt
 import random
-from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_mail import Mail, Message
@@ -18,21 +17,31 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/')
-def home_page():
-    return render_template("index.html")
-
-
-# --- CONFIGURATION ---
+# ========== POSTGRESQL CONFIGURATION ==========
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
 
-app.config['SQLALCHEMY_DATABASE_URI'] = (
-    f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
-    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-)
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Get PostgreSQL connection string from Render
+database_url = os.environ.get('DATABASE_URL')
 
-# Email Configuration
+# Fix URL format if needed (Render sometimes gives postgres://)
+if database_url and database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+# Fallback for local development
+if not database_url:
+    database_url = 'postgresql://localhost/stuflow'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_recycle': 300,
+    'pool_pre_ping': True,
+    'connect_args': {
+        'connect_timeout': 10
+    }
+}
+
+# ========== EMAIL CONFIGURATION ==========
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
 app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
 app.config['MAIL_USE_TLS'] = True
@@ -43,15 +52,40 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@st
 db = SQLAlchemy(app)
 mail = Mail(app)
 
-# --- HOMEPAGE ROUTE ---
+# ========== HEALTH CHECK ENDPOINT ==========
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Check if the API and database are working"""
+    try:
+        # Test database connection
+        db.session.execute('SELECT 1')
+        
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'database': 'disconnected',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
+
+# ========== HOMEPAGE ROUTES ==========
 @app.route('/')
+def home_page():
+    return render_template("index.html")
+
+@app.route('/api')
 def home():
     return jsonify({
         "status": "ok",
         "message": "StuFlow API is running successfully."
     }), 200
 
-# --- MODELS ---
+# ========== MODELS ==========
 class VerificationCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(100), nullable=False)
@@ -70,13 +104,13 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     role = db.Column(db.String(10), nullable=False, default='student')
 
-    tasks = db.relationship('Task', backref='user', lazy=True)
-    events = db.relationship('Event', backref='user', lazy=True)
-    flashcards = db.relationship('Flashcard', backref='user', lazy=True)
-    eco_logs = db.relationship('EcoLog', backref='user', lazy=True)
-    classes = db.relationship('Class', backref='teacher', lazy=True)
-    announcements = db.relationship('Announcement', backref='teacher', lazy=True)
-    resources = db.relationship('ResourceFile', backref='teacher', foreign_keys='ResourceFile.teacher_id', lazy=True)
+    tasks = db.relationship('Task', backref='user', lazy=True, cascade='all, delete-orphan')
+    events = db.relationship('Event', backref='user', lazy=True, cascade='all, delete-orphan')
+    flashcards = db.relationship('Flashcard', backref='user', lazy=True, cascade='all, delete-orphan')
+    eco_logs = db.relationship('EcoLog', backref='user', lazy=True, cascade='all, delete-orphan')
+    classes = db.relationship('Class', backref='teacher', lazy=True, cascade='all, delete-orphan')
+    announcements = db.relationship('Announcement', backref='teacher', lazy=True, cascade='all, delete-orphan')
+    resources = db.relationship('ResourceFile', backref='teacher', foreign_keys='ResourceFile.teacher_id', lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -86,7 +120,7 @@ class User(db.Model):
 
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text)
     due_date = db.Column(db.Date, nullable=False)
@@ -94,15 +128,15 @@ class Task(db.Model):
 
 class Event(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     date = db.Column(db.Date, nullable=False)
     type = db.Column(db.String(20), nullable=False)
 
 class Submission(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.Integer, db.ForeignKey('task.id'), nullable=False)
-    student_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    task_id = db.Column(db.Integer, db.ForeignKey('task.id', ondelete='CASCADE'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     submitted_file = db.Column(db.String(255))
     status = db.Column(db.String(20), default='Submitted')
     date_submitted = db.Column(db.DateTime, default=datetime.utcnow)
@@ -114,13 +148,13 @@ class Submission(db.Model):
 
 class Flashcard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     front = db.Column(db.Text, nullable=False)
     back = db.Column(db.Text, nullable=False)
 
 class ResourceFile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     file_name = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     class_name = db.Column(db.String(100), default='All Classes')
@@ -128,7 +162,7 @@ class ResourceFile(db.Model):
 
 class EcoLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     date = db.Column(db.Date, nullable=False)
     waste_count = db.Column(db.Integer, default=0)
     energy_count = db.Column(db.Integer, default=0)
@@ -139,19 +173,19 @@ class EcoLog(db.Model):
 
 class Class(db.Model):
     id = db.Column(db.String(50), primary_key=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     estimated_students = db.Column(db.Integer, default=0)
 
 class Announcement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    teacher_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     message = db.Column(db.Text, nullable=False)
     recipient = db.Column(db.String(100), nullable=False)
     date_posted = db.Column(db.DateTime, default=datetime.utcnow)
 
-# --- AUTH DECORATORS ---
+# ========== AUTH DECORATORS ==========
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -188,7 +222,7 @@ def role_required(roles):
         return decorated
     return wrapper
 
-# --- FIXED SIGNUP ENDPOINT ---
+# ========== AUTH ENDPOINTS ==========
 @app.route('/api/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'GET':
@@ -226,7 +260,6 @@ def signup():
         db.session.rollback()
         return jsonify({'message': f'Error: {e}'}), 500
 
-# --- FIXED LOGIN ENDPOINT ---
 @app.route('/api/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
@@ -286,7 +319,6 @@ StuFlow Team
         "requires_verification": True
     }), 200
 
-# --- FIXED VERIFY ENDPOINT ---
 @app.route('/api/verify', methods=['GET', 'POST'])
 def verify_code():
     if request.method == 'GET':
@@ -328,7 +360,6 @@ def verify_code():
         "message": "Verification successful!"
     }), 200
 
-# --- FIXED RESEND ENDPOINT ---
 @app.route('/api/verify/resend', methods=['GET', 'POST'])
 def resend_verification():
     if request.method == 'GET':
@@ -382,12 +413,7 @@ StuFlow Team
 
     return jsonify({"message": "New verification code sent"}), 200
 
-# --- ALL OTHER ENDPOINTS REMAIN UNCHANGED ---
-# (Your original task, event, submission, flashcard, resources, eco-log, class, announcements routes remain the same)
-
-# --- DB INIT COMMAND -
-# --- USER ENDPOINTS --
-
+# ========== USER ENDPOINTS ==========
 @app.route('/api/user/me', methods=['GET'])
 @token_required
 def get_current_user():
@@ -440,8 +466,7 @@ def update_password():
         db.session.rollback()
         return jsonify({'message': 'Error updating password.'}), 500
 
-# --- TASK ENDPOINTS ---
-
+# ========== TASK ENDPOINTS ==========
 @app.route('/api/tasks', methods=['GET'])
 @token_required
 def get_tasks():
@@ -520,8 +545,7 @@ def complete_task(task_id):
     db.session.commit()
     return jsonify({'message': 'Task marked as completed!'}), 200
 
-# --- SUBMISSION ENDPOINTS ---
-
+# ========== SUBMISSION ENDPOINTS ==========
 @app.route('/api/submissions/<int:task_id>/submit', methods=['POST'])
 @token_required
 @role_required('student')
@@ -616,8 +640,7 @@ def grade_submission(submission_id):
         db.session.rollback()
         return jsonify({'message': f'Error grading submission: {e}'}), 500
 
-# --- EVENT ENDPOINTS ---
-
+# ========== EVENT ENDPOINTS ==========
 @app.route('/api/events', methods=['GET'])
 @token_required
 def get_events():
@@ -650,8 +673,7 @@ def create_event():
     db.session.commit()
     return jsonify({'message': 'Event created!', 'id': new_event.id}), 201
 
-# --- STUDY TOOLS ENDPOINTS ---
-
+# ========== STUDY TOOLS ENDPOINTS ==========
 @app.route('/api/flashcards', methods=['GET'])
 @token_required
 def get_flashcards():
@@ -681,8 +703,7 @@ def create_flashcard():
     db.session.commit()
     return jsonify({'message': 'Flashcard created!', 'id': new_card.id}), 201
 
-# --- RESOURCE ENDPOINTS ---
-
+# ========== RESOURCE ENDPOINTS ==========
 @app.route('/api/resources/upload', methods=['POST'])
 @token_required
 @role_required('teacher')
@@ -732,8 +753,7 @@ def get_resources():
         
     return jsonify(output)
 
-# --- ECO LOG ENDPOINTS ---
-
+# ========== ECO LOG ENDPOINTS ==========
 @app.route('/api/eco-log/action/<string:action_type>', methods=['POST'])
 @token_required
 def log_eco_action(action_type):
@@ -789,7 +809,6 @@ def log_eco_action(action_type):
         'score': log.score
     }), 200
 
-
 @app.route('/api/eco-log/daily', methods=['GET'])
 @token_required
 def get_eco_log():
@@ -811,8 +830,7 @@ def get_eco_log():
         'score': log.score
     })
 
-# --- TEACHER/CLASS ENDPOINTS ---
-
+# ========== TEACHER/CLASS ENDPOINTS ==========
 @app.route('/api/classes', methods=['GET'])
 @token_required
 @role_required('teacher')
@@ -847,8 +865,7 @@ def create_class():
     db.session.commit()
     return jsonify({'message': 'Class created!', 'id': new_class.id}), 201
 
-# --- ANNOUNCEMENTS ENDPOINTS ---
-
+# ========== ANNOUNCEMENTS ENDPOINTS ==========
 @app.route('/api/announcements', methods=['POST'])
 @token_required
 @role_required('teacher')
@@ -891,8 +908,7 @@ def get_announcements():
         })
     return jsonify(output)
 
-# --- DB INIT COMMAND ---
-
+# ========== DATABASE INITIALIZATION ==========
 @app.cli.command("init-db")
 def init_db():
     try:
@@ -914,9 +930,7 @@ def init_db():
     except Exception as e:
         print(f"Error: {e}")
 
+# ========== MAIN APPLICATION ==========
 if __name__ == '__main__':
-    app.run(debug=True)
-
-
-
-
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
