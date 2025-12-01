@@ -15,7 +15,17 @@ import uuid
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "https://stuflow-frontend.onrender.com",  # Your frontend
+            "http://127.0.0.1:5500",  # Local testing
+            "http://localhost:5500"   # Local testing
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # --- CONFIGURATION ---
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
@@ -888,3 +898,4 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
