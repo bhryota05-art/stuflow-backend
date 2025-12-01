@@ -1,8 +1,8 @@
 Flask==2.3.3
+Flask-CORS==3.0.10
 Flask-SQLAlchemy==3.0.5
-Flask-CORS==4.0.0
-Flask-Mail==0.9.1
-PyJWT==2.8.0
-python-dotenv==1.0.0
 Werkzeug==2.3.7
-gunicorn==21.2.0
+python-dotenv==1.0.0
+PyJWT==2.8.0
+# Remove: mysql-connector-python==8.2.0
+# No extra package needed for SQLite (built-in)
