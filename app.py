@@ -11,19 +11,40 @@ from werkzeug.utils import secure_filename
 from functools import wraps
 from dotenv import load_dotenv
 import uuid
+from urllib.parse import quote_plus
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# ========== SIMPLE DATABASE CONFIGURATION ==========
+# ========== MYSQL RAILWAY CONFIGURATION ==========
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
 
-# Use SQLite - simple and reliable
-basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "stuflow.db")}'
+# Get MySQL credentials from Railway environment variables
+db_user = os.environ.get('DB_USER', 'root')
+db_password = os.environ.get('DB_PASSWORD', 'RytOnKjDLMFukTmPFTFEhthiwrlYodhm')
+db_host = os.environ.get('DB_HOST', 'megalev.proxy.rlwy.net')
+db_port = os.environ.get('DB_PORT', '34221')
+db_name = os.environ.get('DB_NAME', 'railway')
+
+# URL encode password for special characters
+encoded_password = quote_plus(db_password)
+
+# Construct MySQL connection string for Railway
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    f"mysql+mysqlconnector://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}"
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Connection pool settings
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_recycle': 300,
+    'pool_pre_ping': True,
+    'connect_args': {
+        'connect_timeout': 10
+    }
+}
 
 # ========== EMAIL CONFIGURATION ==========
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -39,11 +60,24 @@ mail = Mail(app)
 # ========== HEALTH CHECK ==========
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'message': 'StuFlow API is running',
-        'timestamp': datetime.utcnow().isoformat()
-    }), 200
+    try:
+        # Test database connection
+        db.session.execute('SELECT 1')
+        
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'db_host': db_host,
+            'db_name': db_name,
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'database': 'disconnected',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
 
 @app.route('/')
 def home_page():
@@ -478,10 +512,6 @@ def create_task():
             status='Assignment'
         )
         db.session.add(teacher_task)
-        db.session.flush()
-
-        # For now, just create the teacher's task
-        # We'll add student distribution later
         
         db.session.commit()
         return jsonify({
@@ -789,7 +819,7 @@ def get_announcements():
         })
     return jsonify(output)
 
-# ========== INITIALIZE DATABASE ==========
+# ========== CREATE TABLES IF NOT EXISTS ==========
 @app.before_first_request
 def create_tables():
     try:
