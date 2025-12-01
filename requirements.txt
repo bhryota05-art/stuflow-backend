@@ -4,5 +4,4 @@ Flask-SQLAlchemy==3.0.5
 Werkzeug==2.3.7
 python-dotenv==1.0.0
 PyJWT==2.8.0
-# Remove: mysql-connector-python==8.2.0
-# No extra package needed for SQLite (built-in)
+gunicorn==20.1.0  # ← ADD THIS LINE!
