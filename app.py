@@ -18,17 +18,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # 2. THEN configure CORS
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "https://stuflow-frontend.onrender.com",  # ← YOUR frontend
-            "http://127.0.0.1:5500",
-            "http://localhost:5500"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
+CORS(app, origins="*", supports_credentials=True)
 
 # 3. THEN add after_request handler (OPTIONAL - CORS already handles this)
 @app.after_request
@@ -277,10 +267,10 @@ def login():
 
     # Send verification email
     try:
-        msg = Message(
-            subject='StuFlow - Verification Code',
-            recipients=[email],
-            body=f'''
+    msg = Message(
+        subject='StuFlow - Verification Code',
+        recipients=[email],
+        body=f'''
 Hello {user.name},
 
 Your verification code for StuFlow is: {code}
@@ -291,17 +281,15 @@ If you didn't request this code, please ignore this email.
 
 Best regards,
 StuFlow Team
-            '''
-        )
-        mail.send(msg)
-    except Exception as e:
-        print(f"Email sending failed: {e}")
-        return jsonify({'message': 'Failed to send verification email.'}), 500
+        '''
+    )
+    mail.send(msg)
+except Exception as e:
+    print(f"Email sending failed: {e}")
+    return jsonify({'message': 'Failed to send verification email.'}), 500
 
-    return jsonify({
-        'message': 'Verification code sent to your email.',
-        'requires_verification': True
-    }), 200
+# REPLACE with this:
+print(f"Verification code for {email}: {code}")
 
 # Add verification endpoint
 @app.route('/api/verify', methods=['POST'])
@@ -910,6 +898,7 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
