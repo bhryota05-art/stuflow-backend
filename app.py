@@ -11,40 +11,19 @@ from werkzeug.utils import secure_filename
 from functools import wraps
 from dotenv import load_dotenv
 import uuid
-from urllib.parse import quote_plus
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# ========== MYSQL RAILWAY CONFIGURATION ==========
+# ========== DATABASE CONFIGURATION ==========
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
 
-# Get MySQL credentials from Railway environment variables
-db_user = os.environ.get('DB_USER', 'root')
-db_password = os.environ.get('DB_PASSWORD', 'RytOnKjDLMFukTmPFTFEhthiwrlYodhm')
-db_host = os.environ.get('DB_HOST', 'megalev.proxy.rlwy.net')
-db_port = os.environ.get('DB_PORT', '34221')
-db_name = os.environ.get('DB_NAME', 'railway')
-
-# URL encode password for special characters
-encoded_password = quote_plus(db_password)
-
-# Construct MySQL connection string for Railway
-app.config['SQLALCHEMY_DATABASE_URI'] = (
-    f"mysql+mysqlconnector://{db_user}:{encoded_password}@{db_host}:{db_port}/{db_name}"
-)
+# Use SQLite file database (will create stuflow.db file)
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "stuflow.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Connection pool settings
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_recycle': 300,
-    'pool_pre_ping': True,
-    'connect_args': {
-        'connect_timeout': 10
-    }
-}
 
 # ========== EMAIL CONFIGURATION ==========
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -60,24 +39,11 @@ mail = Mail(app)
 # ========== HEALTH CHECK ==========
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    try:
-        # Test database connection
-        db.session.execute('SELECT 1')
-        
-        return jsonify({
-            'status': 'healthy',
-            'database': 'connected',
-            'db_host': db_host,
-            'db_name': db_name,
-            'timestamp': datetime.utcnow().isoformat()
-        }), 200
-    except Exception as e:
-        return jsonify({
-            'status': 'unhealthy',
-            'database': 'disconnected',
-            'error': str(e),
-            'timestamp': datetime.utcnow().isoformat()
-        }), 500
+    return jsonify({
+        'status': 'healthy',
+        'message': 'StuFlow API is running',
+        'timestamp': datetime.utcnow().isoformat()
+    }), 200
 
 @app.route('/')
 def home_page():
@@ -224,7 +190,6 @@ def role_required(roles):
         @wraps(f)
         def decorated(*args, **kwargs):
             role_list = [roles] if isinstance(roles, str) else roles
-
             if g.current_user.role not in role_list:
                 return jsonify({'message': 'Access forbidden: Insufficient permissions'}), 403
             return f(*args, **kwargs)
@@ -301,47 +266,20 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({"message": "Invalid email or password"}), 401
 
-    # Generate verification code
-    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
-    expires_at = datetime.utcnow() + timedelta(minutes=10)
-
-    # Mark old codes as used
-    VerificationCode.query.filter_by(email=email).update({'used': True})
-
-    verification = VerificationCode(
-        email=email,
-        code=code,
-        expires_at=expires_at
-    )
-    
-    try:
-        db.session.add(verification)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"message": f"Database error: {str(e)}"}), 500
-
-    # Send email
-    try:
-        msg = Message(
-            subject='StuFlow Verification Code',
-            recipients=[email],
-            body=f"""Hello {user.name},
-
-Your verification code is: {code}
-(Expires in 10 minutes)
-
-StuFlow Team"""
-        )
-        mail.send(msg)
-    except Exception as e:
-        print(f"Email error: {e}")
-        # Continue anyway - user can request new code
+    token = jwt.encode({
+        'user_id': user.id,
+        'exp': datetime.utcnow() + timedelta(hours=24)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
 
     return jsonify({
-        "message": "Verification code sent.",
-        "requires_verification": True,
-        "email": email
+        'token': token,
+        'user': {
+            'id': user.id,
+            'name': user.name,
+            'email': user.email,
+            'role': user.role
+        },
+        'message': 'Login successful!'
     }), 200
 
 @app.route('/api/verify', methods=['GET', 'POST'])
@@ -349,7 +287,7 @@ def verify_code():
     if request.method == 'GET':
         return jsonify({
             "status": "ok",
-            "message": "Send POST with email & verification code."
+            "message": "Verification endpoint (for email verification)"
         }), 200
 
     if not request.is_json:
@@ -362,11 +300,7 @@ def verify_code():
     if not email or not code:
         return jsonify({"message": "Email and code required"}), 400
 
-    verification = VerificationCode.query.filter_by(
-        email=email, 
-        code=code, 
-        used=False
-    ).first()
+    verification = VerificationCode.query.filter_by(email=email, code=code, used=False).first()
 
     if not verification or not verification.is_valid():
         return jsonify({"message": "Invalid or expired code"}), 401
@@ -391,58 +325,6 @@ def verify_code():
         "email": user.email,
         "message": "Verification successful!"
     }), 200
-
-@app.route('/api/verify/resend', methods=['POST'])
-def resend_verification():
-    if not request.is_json:
-        return jsonify({"message": "Content-Type must be application/json"}), 415
-
-    data = request.get_json()
-    email = data.get('email')
-
-    if not email:
-        return jsonify({"message": "Email is required"}), 400
-
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({"message": "User not found"}), 404
-
-    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
-    expires_at = datetime.utcnow() + timedelta(minutes=10)
-
-    VerificationCode.query.filter_by(email=email).update({'used': True})
-
-    verification = VerificationCode(
-        email=email,
-        code=code,
-        expires_at=expires_at
-    )
-    
-    try:
-        db.session.add(verification)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"message": f"Database error: {str(e)}"}), 500
-
-    # Send email
-    try:
-        msg = Message(
-            subject='New StuFlow Verification Code',
-            recipients=[email],
-            body=f"""Hello {user.name},
-
-Your NEW verification code is: {code}
-(Expires in 10 minutes)
-
-StuFlow Team"""
-        )
-        mail.send(msg)
-    except Exception as e:
-        print(f"Email error: {e}")
-        # Still return success - code is in database
-
-    return jsonify({"message": "New verification code sent"}), 200
 
 # ========== USER ENDPOINTS ==========
 @app.route('/api/user/me', methods=['GET'])
@@ -476,18 +358,14 @@ def update_profile():
 @app.route('/api/tasks', methods=['GET'])
 @token_required
 def get_tasks():
+    tasks = Task.query.filter_by(user_id=g.current_user.id).all()
     output = []
-    if g.current_user.role == 'teacher':
-        tasks = Task.query.filter_by(user_id=g.current_user.id, status='Assignment').all()
-    else:
-        tasks = Task.query.filter_by(user_id=g.current_user.id).all()
-    
     for task in tasks:
         output.append({
             'id': task.id,
             'title': task.title,
             'description': task.description,
-            'due': task.due_date.strftime('%Y-%m-%d') if task.due_date else None,
+            'due': task.due_date.strftime('%Y-%m-%d'),
             'status': task.status
         })
     return jsonify(output)
@@ -495,33 +373,29 @@ def get_tasks():
 @app.route('/api/tasks', methods=['POST'])
 @token_required
 def create_task():
-    if g.current_user.role != 'teacher':
-        return jsonify({'message': 'Only teachers can create assignments.'}), 403
-
     data = request.get_json()
     
     if not data.get('title') or not data.get('due'):
         return jsonify({'message': 'Title and due date are required.'}), 400
 
     try:
-        teacher_task = Task(
+        new_task = Task(
             user_id=g.current_user.id,
             title=data['title'],
             description=data.get('description', ''),
             due_date=datetime.strptime(data['due'], '%Y-%m-%d').date(),
-            status='Assignment'
+            status='Ongoing'
         )
-        db.session.add(teacher_task)
-        
+        db.session.add(new_task)
         db.session.commit()
         return jsonify({
-            'message': 'Assignment created!', 
-            'id': teacher_task.id,
-            'title': teacher_task.title
+            'message': 'Task created!', 
+            'id': new_task.id,
+            'title': new_task.title
         }), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({'message': f'Error creating task: {str(e)}'}), 500
+        return jsonify({'message': f'Error: {str(e)}'}), 500
 
 @app.route('/api/tasks/<int:task_id>/complete', methods=['PUT'])
 @token_required
@@ -541,19 +415,16 @@ def complete_task(task_id):
 @role_required('teacher')
 def get_submissions():
     submissions = Submission.query.all()
-    
     output = []
     for sub in submissions:
         task = Task.query.filter_by(id=sub.task_id).first()
         student = User.query.filter_by(id=sub.student_id).first()
-        
         if task and student:
             output.append({
                 'id': sub.id,
                 'task_id': sub.task_id,
                 'student_name': student.name,
                 'assignment_title': task.title,
-                'due_date': task.due_date.strftime('%Y-%m-%d') if task.due_date else None,
                 'submitted_file': sub.submitted_file,
                 'status': sub.status,
                 'grade': sub.grade,
@@ -566,13 +437,7 @@ def get_submissions():
 @token_required
 def get_flashcards():
     flashcards = Flashcard.query.filter_by(user_id=g.current_user.id).all()
-    output = []
-    for card in flashcards:
-        output.append({
-            'id': card.id,
-            'front': card.front,
-            'back': card.back
-        })
+    output = [{'id': c.id, 'front': c.front, 'back': c.back} for c in flashcards]
     return jsonify(output)
 
 @app.route('/api/flashcards', methods=['POST'])
@@ -580,79 +445,52 @@ def get_flashcards():
 def create_flashcard():
     data = request.get_json()
     if not data.get('front') or not data.get('back'):
-        return jsonify({'message': 'Front and back fields are required.'}), 400
+        return jsonify({'message': 'Front and back are required.'}), 400
 
     new_card = Flashcard(
         user_id=g.current_user.id,
         front=data['front'],
         back=data['back']
     )
-    
-    try:
-        db.session.add(new_card)
-        db.session.commit()
-        return jsonify({
-            'message': 'Flashcard created!', 
-            'id': new_card.id,
-            'front': new_card.front,
-            'back': new_card.back
-        }), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': f'Error creating flashcard: {str(e)}'}), 500
+    db.session.add(new_card)
+    db.session.commit()
+    return jsonify({'message': 'Flashcard created!', 'id': new_card.id}), 201
 
 # ========== EVENT ENDPOINTS ==========
 @app.route('/api/events', methods=['GET'])
 @token_required
 def get_events():
     events = Event.query.filter_by(user_id=g.current_user.id).all()
-    output = []
-    for event in events:
-        output.append({
-            'id': event.id,
-            'title': event.title,
-            'date': event.date.strftime('%Y-%m-%d') if event.date else None,
-            'type': event.type
-        })
+    output = [{'id': e.id, 'title': e.title, 'date': e.date.strftime('%Y-%m-%d'), 'type': e.type} for e in events]
     return jsonify(output)
 
 @app.route('/api/events', methods=['POST'])
 @token_required
 def create_event():
     data = request.get_json()
-    
     if not data.get('title') or not data.get('date') or not data.get('type'):
         return jsonify({'message': 'Title, date, and type are required.'}), 400
 
-    try:
-        new_event = Event(
-            user_id=g.current_user.id,
-            title=data['title'],
-            date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-            type=data['type']
-        )
-        db.session.add(new_event)
-        db.session.commit()
-        return jsonify({
-            'message': 'Event created!', 
-            'id': new_event.id,
-            'title': new_event.title
-        }), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': f'Error creating event: {str(e)}'}), 500
+    new_event = Event(
+        user_id=g.current_user.id,
+        title=data['title'],
+        date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
+        type=data['type']
+    )
+    db.session.add(new_event)
+    db.session.commit()
+    return jsonify({'message': 'Event created!', 'id': new_event.id}), 201
 
 # ========== RESOURCE ENDPOINTS ==========
 @app.route('/api/resources', methods=['GET'])
 @token_required
 def get_resources():
-    output = []
-    
     if g.current_user.role == 'teacher':
-        resources = ResourceFile.query.filter_by(teacher_id=g.current_user.id).order_by(ResourceFile.date_uploaded.desc()).all()
+        resources = ResourceFile.query.filter_by(teacher_id=g.current_user.id).all()
     else:
-        resources = ResourceFile.query.filter_by(class_name='All Classes').order_by(ResourceFile.date_uploaded.desc()).all()
-        
+        resources = ResourceFile.query.filter_by(class_name='All Classes').all()
+    
+    output = []
     for res in resources:
         teacher = User.query.get(res.teacher_id)
         output.append({
@@ -662,7 +500,6 @@ def get_resources():
             'teacher_name': teacher.name if teacher else 'Unknown Teacher',
             'date_uploaded': res.date_uploaded.strftime('%Y-%m-%d')
         })
-        
     return jsonify(output)
 
 # ========== ECO LOG ENDPOINTS ==========
@@ -672,37 +509,24 @@ def log_eco_action(action_type):
     if action_type not in ['waste', 'energy', 'transport']:
         return jsonify({'message': 'Invalid action type.'}), 400
 
-    date_key = datetime.utcnow().date()
-
-    log = EcoLog.query.filter_by(user_id=g.current_user.id, date=date_key).first()
+    today = datetime.utcnow().date()
+    log = EcoLog.query.filter_by(user_id=g.current_user.id, date=today).first()
 
     if not log:
-        log = EcoLog(
-            user_id=g.current_user.id,
-            date=date_key,
-            waste_count=0,
-            energy_count=0,
-            transport_count=0,
-            score=0
-        )
+        log = EcoLog(user_id=g.current_user.id, date=today)
         db.session.add(log)
-
-    score_increment = 0
 
     if action_type == 'waste':
         log.waste_count += 1
-        score_increment = 5
+        log.score += 5
     elif action_type == 'energy':
         log.energy_count += 1
-        score_increment = 5
+        log.score += 5
     elif action_type == 'transport':
         log.transport_count += 1
-        score_increment = 10
-
-    log.score += score_increment
+        log.score += 10
 
     db.session.commit()
-
     return jsonify({
         'waste': log.waste_count,
         'energy': log.energy_count,
@@ -713,23 +537,18 @@ def log_eco_action(action_type):
 @app.route('/api/eco-log/daily', methods=['GET'])
 @token_required
 def get_eco_log():
-    date_str = request.args.get('date', datetime.utcnow().strftime('%Y-%m-%d'))
-    try:
-        date_key = datetime.strptime(date_str, '%Y-%m-%d').date()
-    except ValueError:
-        return jsonify({'message': 'Invalid date format. Use YYYY-MM-DD.'}), 400
-    
-    log = EcoLog.query.filter_by(user_id=g.current_user.id, date=date_key).first()
+    today = datetime.utcnow().date()
+    log = EcoLog.query.filter_by(user_id=g.current_user.id, date=today).first()
     
     if not log:
-        return jsonify({ 'waste': 0, 'energy': 0, 'transport': 0, 'score': 0 }), 200
-
+        return jsonify({'waste': 0, 'energy': 0, 'transport': 0, 'score': 0}), 200
+    
     return jsonify({
         'waste': log.waste_count,
         'energy': log.energy_count,
         'transport': log.transport_count,
         'score': log.score
-    })
+    }), 200
 
 # ========== CLASS ENDPOINTS ==========
 @app.route('/api/classes', methods=['GET'])
@@ -737,13 +556,7 @@ def get_eco_log():
 @role_required('teacher')
 def get_classes():
     classes = Class.query.filter_by(teacher_id=g.current_user.id).all()
-    output = []
-    for cls in classes:
-        output.append({
-            'id': cls.id,
-            'name': cls.name,
-            'estimated_students': cls.estimated_students
-        })
+    output = [{'id': c.id, 'name': c.name, 'estimated_students': c.estimated_students} for c in classes]
     return jsonify(output)
 
 @app.route('/api/classes', methods=['POST'])
@@ -755,21 +568,15 @@ def create_class():
         return jsonify({'message': 'Class name is required.'}), 400
         
     class_id = f"class-{uuid.uuid4().hex[:8]}"
-
     new_class = Class(
         id=class_id,
         teacher_id=g.current_user.id,
         name=data['name'],
         estimated_students=data.get('size', 30)
     )
-    
-    try:
-        db.session.add(new_class)
-        db.session.commit()
-        return jsonify({'message': 'Class created!', 'id': new_class.id}), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': f'Error creating class: {str(e)}'}), 500
+    db.session.add(new_class)
+    db.session.commit()
+    return jsonify({'message': 'Class created!', 'id': new_class.id}), 201
 
 # ========== ANNOUNCEMENTS ENDPOINTS ==========
 @app.route('/api/announcements', methods=['POST'])
@@ -791,42 +598,50 @@ def create_announcement():
         recipient=recipient,
         date_posted=datetime.utcnow()
     )
-    
-    try:
-        db.session.add(new_announcement)
-        db.session.commit()
-        return jsonify({'message': f'Announcement "{title}" posted successfully to {recipient}!'}), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'message': f'Error creating announcement: {str(e)}'}), 500
+    db.session.add(new_announcement)
+    db.session.commit()
+    return jsonify({'message': f'Announcement "{title}" posted successfully to {recipient}!'}), 201
 
 @app.route('/api/announcements', methods=['GET'])
 @token_required
 def get_announcements():
     if g.current_user.role == 'student':
-        announcements = Announcement.query.order_by(Announcement.date_posted.desc()).all()
+        announcements = Announcement.query.all()
     else:
-        announcements = Announcement.query.filter_by(teacher_id=g.current_user.id).order_by(Announcement.date_posted.desc()).all()
-        
-    output = []
-    for ann in announcements:
-        output.append({
-            'id': ann.id,
-            'title': ann.title,
-            'message': ann.message,
-            'recipient': ann.recipient,
-            'date': ann.date_posted.strftime('%Y-%m-%d')
-        })
+        announcements = Announcement.query.filter_by(teacher_id=g.current_user.id).all()
+    
+    output = [{
+        'id': a.id,
+        'title': a.title,
+        'message': a.message,
+        'recipient': a.recipient,
+        'date': a.date_posted.strftime('%Y-%m-%d')
+    } for a in announcements]
     return jsonify(output)
 
-# ========== CREATE TABLES IF NOT EXISTS ==========
+# ========== INITIALIZE DATABASE ==========
 @app.before_first_request
-def create_tables():
+def initialize():
     try:
         db.create_all()
         print("Database tables created successfully")
+        
+        # Create test users if none exist
+        if not User.query.first():
+            # Create test teacher
+            teacher = User(name="Demo Teacher", email="teacher@stuflow.com", role="teacher")
+            teacher.set_password("password123")
+            db.session.add(teacher)
+            
+            # Create test student
+            student = User(name="Demo Student", email="student@stuflow.com", role="student")
+            student.set_password("password123")
+            db.session.add(student)
+            
+            db.session.commit()
+            print("Test users created: teacher@stuflow.com / student@stuflow.com (password: password123)")
     except Exception as e:
-        print(f"Error creating tables: {e}")
+        print(f"Error during initialization: {e}")
 
 # ========== MAIN ==========
 if __name__ == '__main__':
