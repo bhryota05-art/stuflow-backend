@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 import jwt
 import random
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, send_from_directory # Added send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_mail import Mail, Message
@@ -861,8 +861,19 @@ def get_announcements():
         })
     return jsonify(output)
 
-# --- DB INIT COMMAND ---
+# --- STATIC FILE ROUTE FOR RENDER DEPLOYMENT ---
+@app.route('/')
+def serve_index():
+    # This assumes index.html is in the same directory as app.py
+    # and is the entry point for your frontend.
+    return app.send_static_file('index.html')
 
+# Configure Flask to find static files (like index.html)
+# If your index.html is in the root directory:
+app.config['STATIC_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
+
+
+# --- DB INIT COMMAND ---
 # Since we are using an in-memory database, it must be initialized immediately on app load.
 with app.app_context():
     try:
