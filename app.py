@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 import jwt
 import random
-from flask import Flask, request, jsonify, g, send_from_directory # Added send_from_directory
+from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_mail import Mail, Message
@@ -19,9 +19,25 @@ CORS(app)
 
 # --- CONFIGURATION ---
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
-# CHANGE: Switched to in-memory SQLite database
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:' 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# --- DATABASE CONFIGURATION FOR RENDER/POSTGRESQL WITH LOCAL FALLBACK ---
+# 1. Check for the production URL provided by Render.
+database_url = os.getenv('DATABASE_URL')
+
+# 2. Fix the protocol if using PostgreSQL on Render (changes 'postgres://' to 'postgresql://')
+if database_url and database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+# 3. Apply config: use production URL if available, otherwise use local MySQL config.
+if database_url:
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    # Local MySQL Fallback (requires mysql-connector-python locally)
+    app.config['SQLALCHEMY_DATABASE_URI'] = (
+        f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@"
+        f"{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+    )
 
 # Email Configuration
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -34,7 +50,7 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@st
 db = SQLAlchemy(app)
 mail = Mail(app)
 
-# Add Verification Code Model
+# Existing models remain the same...
 class VerificationCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(100), nullable=False)
@@ -46,7 +62,6 @@ class VerificationCode(db.Model):
     def is_valid(self):
         return datetime.utcnow() < self.expires_at and not self.used
 
-# Existing models remain the same...
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -861,40 +876,29 @@ def get_announcements():
         })
     return jsonify(output)
 
-# --- STATIC FILE ROUTE FOR RENDER DEPLOYMENT ---
-@app.route('/')
-def serve_index():
-    # This assumes index.html is in the same directory as app.py
-    # and is the entry point for your frontend.
-    return app.send_static_file('index.html')
-
-# Configure Flask to find static files (like index.html)
-# If your index.html is in the root directory:
-app.config['STATIC_FOLDER'] = os.path.dirname(os.path.abspath(__file__))
-
-
 # --- DB INIT COMMAND ---
-# Since we are using an in-memory database, it must be initialized immediately on app load.
-with app.app_context():
+
+@app.cli.command("init-db")
+def init_db():
     try:
-        db.drop_all()
-        db.create_all()
-        
-        mock_teacher = User(name="Alex Johnson (Teacher)", email="teacher@stuflow.com", role="teacher")
-        mock_teacher.set_password("password")
-        db.session.add(mock_teacher)
+        with app.app_context():
+            db.drop_all()
+            db.create_all()
+            
+            mock_teacher = User(name="Alex Johnson (Teacher)", email="teacher@stuflow.com", role="teacher")
+            mock_teacher.set_password("password")
+            db.session.add(mock_teacher)
 
-        mock_student = User(name="Sam Smith (Student)", email="student@stuflow.com", role="student")
-        mock_student.set_password("password")
-        db.session.add(mock_student)
+            mock_student = User(name="Sam Smith (Student)", email="student@stuflow.com", role="student")
+            mock_student.set_password("password")
+            db.session.add(mock_student)
 
-        db.session.commit()
-        
-        print("✅ In-memory database initialized successfully! All users start with empty data.")
+            db.session.commit()
+            
+        print("✅ Database initialized successfully! All users start with empty data.")
         print("Test Accounts: student@stuflow.com / password | teacher@stuflow.com / password")
     except Exception as e:
-        print(f"❌ Error during in-memory database initialization: {e}")
-
+        print(f"❌ Error during database initialization: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True)
