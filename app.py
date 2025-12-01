@@ -27,8 +27,8 @@ def home_page():
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
 
 app.config['SQLALCHEMY_DATABASE_URI'] = (
-    f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@"
-    f"{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+    f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -916,6 +916,7 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
