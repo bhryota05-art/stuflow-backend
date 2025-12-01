@@ -18,26 +18,16 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIGURATION ---
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 
-# --- DATABASE CONFIGURATION FOR RENDER/POSTGRESQL WITH LOCAL FALLBACK ---
-# 1. Check for the production URL provided by Render.
-database_url = os.getenv('DATABASE_URL')
+db_uri = os.getenv("DATABASE_URL")
 
-# 2. Fix the protocol if using PostgreSQL on Render (changes 'postgres://' to 'postgresql://')
-if database_url and database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
+# Fix postgres:// → postgresql+psycopg2:// (Render bug)
+if db_uri.startswith("postgres://"):
+    db_uri = db_uri.replace("postgres://", "postgresql+psycopg2://")
 
-# 3. Apply config: use production URL if available, otherwise use local MySQL config.
-if database_url:
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-else:
-    # Local MySQL Fallback (requires mysql-connector-python locally)
-    app.config['SQLALCHEMY_DATABASE_URI'] = (
-        f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@"
-        f"{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
-    )
+app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Email Configuration
 app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
@@ -50,7 +40,7 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@st
 db = SQLAlchemy(app)
 mail = Mail(app)
 
-# Existing models remain the same...
+# Add Verification Code Model
 class VerificationCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(100), nullable=False)
@@ -62,6 +52,7 @@ class VerificationCode(db.Model):
     def is_valid(self):
         return datetime.utcnow() < self.expires_at and not self.used
 
+# Existing models remain the same...
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
