@@ -19,7 +19,7 @@ CORS(app)
 
 # --- CONFIGURATION ---
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
-# This uses environment variables which will be set on Railway for the database connection.
+
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     f"mysql+mysqlconnector://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@"
     f"{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
@@ -37,7 +37,15 @@ app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'noreply@st
 db = SQLAlchemy(app)
 mail = Mail(app)
 
-# Add Verification Code Model
+# --- HOMEPAGE ROUTE ---
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "ok",
+        "message": "StuFlow API is running successfully."
+    }), 200
+
+# --- MODELS ---
 class VerificationCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(100), nullable=False)
@@ -49,13 +57,12 @@ class VerificationCode(db.Model):
     def is_valid(self):
         return datetime.utcnow() < self.expires_at and not self.used
 
-# Existing models remain the same...
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    role = db.Column(db.String(10), nullable=False, default='student') 
+    role = db.Column(db.String(10), nullable=False, default='student')
 
     tasks = db.relationship('Task', backref='user', lazy=True)
     events = db.relationship('Event', backref='user', lazy=True)
@@ -77,14 +84,14 @@ class Task(db.Model):
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text)
     due_date = db.Column(db.Date, nullable=False)
-    status = db.Column(db.String(50), nullable=False, default='Ongoing') 
+    status = db.Column(db.String(50), nullable=False, default='Ongoing')
 
 class Event(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     date = db.Column(db.Date, nullable=False)
-    type = db.Column(db.String(20), nullable=False) 
+    type = db.Column(db.String(20), nullable=False)
 
 class Submission(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -112,7 +119,7 @@ class ResourceFile(db.Model):
     file_path = db.Column(db.String(500), nullable=False)
     class_name = db.Column(db.String(100), default='All Classes')
     date_uploaded = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
 class EcoLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
@@ -121,24 +128,24 @@ class EcoLog(db.Model):
     energy_count = db.Column(db.Integer, default=0)
     transport_count = db.Column(db.Integer, default=0)
     score = db.Column(db.Integer, default=0)
-    
+
     __table_args__ = (db.UniqueConstraint('user_id', 'date', name='_user_date_uc'),)
 
 class Class(db.Model):
-    id = db.Column(db.String(50), primary_key=True) 
+    id = db.Column(db.String(50), primary_key=True)
     teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     estimated_students = db.Column(db.Integer, default=0)
-    
+
 class Announcement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     teacher_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     message = db.Column(db.Text, nullable=False)
-    recipient = db.Column(db.String(100), nullable=False) 
+    recipient = db.Column(db.String(100), nullable=False)
     date_posted = db.Column(db.DateTime, default=datetime.utcnow)
 
-# --- AUTH DECORATOR ---
+# --- AUTH DECORATORS ---
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -153,44 +160,48 @@ def token_required(f):
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user = User.query.filter_by(id=data['user_id']).first()
             if not current_user:
-                 return jsonify({'message': 'Token is invalid: User not found'}), 401
+                return jsonify({'message': 'Token invalid: User not found'}), 401
             g.current_user = current_user
         except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token has expired'}), 401
+            return jsonify({'message': 'Token expired'}), 401
         except Exception:
-            return jsonify({'message': 'Token is invalid'}), 401
+            return jsonify({'message': 'Token invalid'}), 401
         
         return f(*args, **kwargs)
     return decorated
 
-# --- ROLE DECORATOR ---
 def role_required(roles):
     def wrapper(f):
         @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if isinstance(roles, str):
-                role_list = [roles]
-            else:
-                role_list = roles
+        def decorated(*args, **kwargs):
+            role_list = [roles] if isinstance(roles, str) else roles
 
             if g.current_user.role not in role_list:
-                return jsonify({'message': 'Access forbidden: Insufficient permissions.'}), 403
+                return jsonify({'message': 'Access forbidden: Insufficient permissions'}), 403
             return f(*args, **kwargs)
-        return decorated_function
+        return decorated
     return wrapper
 
-# --- AUTH ENDPOINTS ---
-
-@app.route('/api/signup', methods=['POST'])
+# --- FIXED SIGNUP ENDPOINT ---
+@app.route('/api/signup', methods=['GET', 'POST'])
 def signup():
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "message": "StuFlow Signup Endpoint. Send POST with name, email, password, role."
+        }), 200
+
+    if not request.is_json:
+        return jsonify({"message": "Content-Type must be application/json"}), 415
+
     data = request.get_json()
     name = data.get('name')
     email = data.get('email')
     password = data.get('password')
     role = data.get('role', 'student')
-    
+
     if User.query.filter_by(email=email).first():
-        return jsonify({'message': 'Account already exists for that email.'}), 409
+        return jsonify({'message': 'Account already exists.'}), 409
 
     new_user = User(name=name, email=email, role=role)
     new_user.set_password(password)
@@ -198,53 +209,46 @@ def signup():
     try:
         db.session.add(new_user)
         db.session.commit()
-        
+
         token = jwt.encode({
             'user_id': new_user.id,
             'exp': datetime.utcnow() + timedelta(hours=24)
         }, app.config['SECRET_KEY'], algorithm="HS256")
-        
-        return jsonify({'message': 'Account created successfully!', 'token': token}), 201
+
+        return jsonify({'message': 'Account created!', 'token': token}), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({'message': f'Error creating user: {e}'}), 500
+        return jsonify({'message': f'Error: {e}'}), 500
 
+# --- FIXED LOGIN ENDPOINT ---
 @app.route('/api/login', methods=['GET', 'POST'])
 def login():
-    # If the browser visits the URL directly
     if request.method == 'GET':
         return jsonify({
             "status": "ok",
-            "message": "StuFlow Login Endpoint. Send POST with email & password to log in."
+            "message": "StuFlow Login Endpoint. Send POST with email & password."
         }), 200
 
-    # POST request MUST send JSON
     if not request.is_json:
-        return jsonify({
-            "message": "Content-Type must be application/json"
-        }), 415
+        return jsonify({"message": "Content-Type must be application/json"}), 415
 
     data = request.get_json()
-
     email = data.get('email')
     password = data.get('password')
 
     if not email or not password:
-        return jsonify({"message": "Email and password are required."}), 400
+        return jsonify({"message": "Email and password required"}), 400
 
     user = User.query.filter_by(email=email).first()
 
     if not user or not user.check_password(password):
-        return jsonify({"message": "Invalid email or password."}), 401
+        return jsonify({"message": "Invalid email or password"}), 401
 
-    # Generate verification code
     code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
     expires_at = datetime.utcnow() + timedelta(minutes=10)
 
-    # Invalidate existing codes
     VerificationCode.query.filter_by(email=email).update({'used': True})
 
-    # Save new code
     verification = VerificationCode(
         email=email,
         code=code,
@@ -253,50 +257,98 @@ def login():
     db.session.add(verification)
     db.session.commit()
 
-    # Send email
     try:
         msg = Message(
-            subject='StuFlow - Verification Code',
+            subject='StuFlow Verification Code',
             recipients=[email],
             body=f"""
 Hello {user.name},
 
 Your verification code is: {code}
-It expires in 10 minutes.
+(Expires in 10 minutes)
 
 StuFlow Team
 """
         )
         mail.send(msg)
     except Exception as e:
-        print(f"Email failed: {e}")
-        return jsonify({"message": "Failed to send verification email."}), 500
+        print(f"Email error: {e}")
+        return jsonify({"message": "Email failed"}), 500
 
     return jsonify({
-        "message": "Verification code sent to email.",
+        "message": "Verification code sent.",
         "requires_verification": True
     }), 200
 
-# Add resend verification code endpoint
-@app.route('/api/verify/resend', methods=['POST'])
+# --- FIXED VERIFY ENDPOINT ---
+@app.route('/api/verify', methods=['GET', 'POST'])
+def verify_code():
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "message": "Send POST with email & verification code."
+        }), 200
+
+    if not request.is_json:
+        return jsonify({"message": "Content-Type must be application/json"}), 415
+
+    data = request.get_json()
+    email = data.get('email')
+    code = data.get('code')
+
+    if not email or not code:
+        return jsonify({"message": "Email and code required"}), 400
+
+    verification = VerificationCode.query.filter_by(email=email, code=code, used=False).first()
+
+    if not verification or not verification.is_valid():
+        return jsonify({"message": "Invalid or expired code"}), 401
+
+    verification.used = True
+
+    user = User.query.filter_by(email=email).first()
+
+    token = jwt.encode({
+        'user_id': user.id,
+        'exp': datetime.utcnow() + timedelta(hours=24)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+
+    db.session.commit()
+
+    return jsonify({
+        "token": token,
+        "role": user.role,
+        "name": user.name,
+        "message": "Verification successful!"
+    }), 200
+
+# --- FIXED RESEND ENDPOINT ---
+@app.route('/api/verify/resend', methods=['GET', 'POST'])
 def resend_verification():
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "message": "Send POST with email to resend verification code."
+        }), 200
+
+    if not request.is_json:
+        return jsonify({"message": "Content-Type must be application/json"}), 415
+
     data = request.get_json()
     email = data.get('email')
 
     if not email:
-        return jsonify({'message': 'Email is required.'}), 400
+        return jsonify({"message": "Email is required"}), 400
 
     user = User.query.filter_by(email=email).first()
     if not user:
-        return jsonify({'message': 'User not found.'}), 404
+        return jsonify({"message": "User not found"}), 404
 
-    # Generate new verification code
     code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
     expires_at = datetime.utcnow() + timedelta(minutes=10)
-    
-    # Invalidate any existing codes
+
     VerificationCode.query.filter_by(email=email).update({'used': True})
-    
+
     verification = VerificationCode(
         email=email,
         code=code,
@@ -305,32 +357,30 @@ def resend_verification():
     db.session.add(verification)
     db.session.commit()
 
-    # Send verification email
     try:
         msg = Message(
-            subject='StuFlow - New Verification Code',
+            subject='New StuFlow Verification Code',
             recipients=[email],
-            body=f'''
+            body=f"""
 Hello {user.name},
 
-Your new verification code for StuFlow is: {code}
+Your NEW verification code is: {code}
+(Expires in 10 minutes)
 
-This code will expire in 10 minutes.
-
-If you didn't request this code, please ignore this email.
-
-Best regards,
 StuFlow Team
-            '''
+"""
         )
         mail.send(msg)
-    except Exception as e:
-        print(f"Email sending failed: {e}")
-        return jsonify({'message': 'Failed to send verification email.'}), 500
+    except Exception:
+        return jsonify({"message": "Email sending failed"}), 500
 
-    return jsonify({'message': 'New verification code sent to your email.'}), 200
+    return jsonify({"message": "New verification code sent"}), 200
 
-# --- USER ENDPOINTS ---
+# --- ALL OTHER ENDPOINTS REMAIN UNCHANGED ---
+# (Your original task, event, submission, flashcard, resources, eco-log, class, announcements routes remain the same)
+
+# --- DB INIT COMMAND -
+# --- USER ENDPOINTS --
 
 @app.route('/api/user/me', methods=['GET'])
 @token_required
@@ -843,7 +893,7 @@ def init_db():
         with app.app_context():
             db.drop_all()
             db.create_all()
-            
+
             mock_teacher = User(name="Alex Johnson (Teacher)", email="teacher@stuflow.com", role="teacher")
             mock_teacher.set_password("password")
             db.session.add(mock_teacher)
@@ -853,13 +903,12 @@ def init_db():
             db.session.add(mock_student)
 
             db.session.commit()
-            
-        print("✅ Database initialized successfully! All users start with empty data.")
-        print("Test Accounts: student@stuflow.com / password | teacher@stuflow.com / password")
+
+        print("Database initialized successfully!")
     except Exception as e:
-        print(f"❌ Error during database initialization: {e}")
+        print(f"Error: {e}")
 
 if __name__ == '__main__':
-
     app.run(debug=True)
+
 
