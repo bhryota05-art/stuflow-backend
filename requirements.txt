@@ -4,4 +4,5 @@ Flask-SQLAlchemy==3.0.5
 Werkzeug==2.3.7  # For password hashing
 python-dotenv==1.0.0
 PyJWT==2.8.0
-gunicorn==22.0.0  # ADD THIS LINE
+gunicorn==22.0.0
+Flask-Mail==0.9.1  # ADD THIS LINE TO FIX THE CRASH
