@@ -211,23 +211,40 @@ def signup():
 
 @app.route('/api/login', methods=['GET', 'POST'])
 def login():
-    auth = request.get_json()
-    email = auth.get('email')
-    password = auth.get('password')
+    # If the browser visits the URL directly
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "message": "StuFlow Login Endpoint. Send POST with email & password to log in."
+        }), 200
+
+    # POST request MUST send JSON
+    if not request.is_json:
+        return jsonify({
+            "message": "Content-Type must be application/json"
+        }), 415
+
+    data = request.get_json()
+
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"message": "Email and password are required."}), 400
 
     user = User.query.filter_by(email=email).first()
 
     if not user or not user.check_password(password):
-        return jsonify({'message': 'Invalid email or password.'}), 401
+        return jsonify({"message": "Invalid email or password."}), 401
 
     # Generate verification code
     code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
     expires_at = datetime.utcnow() + timedelta(minutes=10)
-    
-    # Invalidate any existing codes for this email
+
+    # Invalidate existing codes
     VerificationCode.query.filter_by(email=email).update({'used': True})
-    
-    # Create new verification code
+
+    # Save new code
     verification = VerificationCode(
         email=email,
         code=code,
@@ -236,74 +253,28 @@ def login():
     db.session.add(verification)
     db.session.commit()
 
-    # Send verification email
+    # Send email
     try:
         msg = Message(
             subject='StuFlow - Verification Code',
             recipients=[email],
-            body=f'''
+            body=f"""
 Hello {user.name},
 
-Your verification code for StuFlow is: {code}
+Your verification code is: {code}
+It expires in 10 minutes.
 
-This code will expire in 10 minutes.
-
-If you didn't request this code, please ignore this email.
-
-Best regards,
 StuFlow Team
-            '''
+"""
         )
         mail.send(msg)
     except Exception as e:
-        print(f"Email sending failed: {e}")
-        return jsonify({'message': 'Failed to send verification email.'}), 500
+        print(f"Email failed: {e}")
+        return jsonify({"message": "Failed to send verification email."}), 500
 
     return jsonify({
-        'message': 'Verification code sent to your email.',
-        'requires_verification': True
-    }), 200
-
-# Add verification endpoint
-@app.route('/api/verify', methods=['POST'])
-def verify_code():
-    data = request.get_json()
-    email = data.get('email')
-    code = data.get('code')
-
-    if not email or not code:
-        return jsonify({'message': 'Email and code are required.'}), 400
-
-    # Find valid verification code
-    verification = VerificationCode.query.filter_by(
-        email=email, 
-        code=code,
-        used=False
-    ).first()
-
-    if not verification or not verification.is_valid():
-        return jsonify({'message': 'Invalid or expired verification code.'}), 401
-
-    # Mark code as used
-    verification.used = True
-    
-    # Get user and generate auth token
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({'message': 'User not found.'}), 404
-
-    token = jwt.encode({
-        'user_id': user.id,
-        'exp': datetime.utcnow() + timedelta(hours=24)
-    }, app.config['SECRET_KEY'], algorithm="HS256")
-
-    db.session.commit()
-
-    return jsonify({
-        'token': token,
-        'role': user.role,
-        'name': user.name,
-        'message': 'Verification successful!'
+        "message": "Verification code sent to email.",
+        "requires_verification": True
     }), 200
 
 # Add resend verification code endpoint
@@ -891,3 +862,4 @@ def init_db():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
