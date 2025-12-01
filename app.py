@@ -1,4 +1,5 @@
 import os
+from flask import Flask, request, jsonify, g, render_template
 from datetime import datetime, timedelta
 import jwt
 import random
@@ -16,6 +17,11 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+@app.route('/')
+def home_page():
+    return render_template("index.html")
+
 
 # --- CONFIGURATION ---
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
@@ -910,5 +916,6 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
