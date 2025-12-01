@@ -209,7 +209,7 @@ def signup():
         db.session.rollback()
         return jsonify({'message': f'Error creating user: {e}'}), 500
 
-@app.route('/api/login', methods=['POST'])
+@app.route('/api/login', methods=['GET', 'POST'])
 def login():
     auth = request.get_json()
     email = auth.get('email')
@@ -889,4 +889,5 @@ def init_db():
         print(f"❌ Error during database initialization: {e}")
 
 if __name__ == '__main__':
+
     app.run(debug=True)
