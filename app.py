@@ -14,7 +14,10 @@ import uuid
 
 load_dotenv()
 
+# 1. FIRST create the Flask app
 app = Flask(__name__)
+
+# 2. THEN configure CORS
 CORS(app, resources={
     r"/api/*": {
         "origins": [
@@ -26,6 +29,15 @@ CORS(app, resources={
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
+
+# 3. THEN add after_request handler (OPTIONAL - CORS already handles this)
+@app.after_request
+def after_request(response):
+    # For development, you can be more permissive
+    response.headers.add('Access-Control-Allow-Origin', 'https://stuflow-frontend.onrender.com')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # --- CONFIGURATION ---
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_secret_key')
@@ -898,4 +910,5 @@ def init_db():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
