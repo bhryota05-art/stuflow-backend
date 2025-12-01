@@ -1,9 +1,9 @@
-# Stuflow Production Requirements
 Flask==2.3.3
 Flask-CORS==3.0.10
 Flask-SQLAlchemy==3.0.5
+Flask-Mail==0.9.1
 Werkzeug==2.3.7
 python-dotenv==1.0.0
 PyJWT==2.8.0
-psycopg2-binary
-gunicorn  <-- ADD THIS LINE
+psycopg2-binary==2.9.9
+gunicorn==21.2.0
