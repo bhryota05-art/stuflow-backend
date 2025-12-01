@@ -5,3 +5,4 @@ Flask-Mail==0.9.1
 PyJWT==2.8.0
 python-dotenv==1.0.0
 Werkzeug==2.3.7
+gunicorn==21.2.0  # ADD THIS LINE
